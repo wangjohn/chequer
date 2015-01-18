@@ -1,18 +1,24 @@
-package chequer
+package main
 
 import (
-  "http"
-  "json"
+  "net/http"
+  "encoding/json"
   "os"
+  "io"
+  "os/exec"
+  "regexp"
+  "log"
+  "bufio"
+  "strings"
   "io/ioutil"
-  "mime/multipart"
 
   "github.com/zenazn/goji"
 )
 
 const (
-  prefix = "tesseract"
-  tesseractLanguage = "msr"
+  tmpPrefix = "chequer_image"
+  resultPrefix = "tesseract_result"
+  tesseractLanguage = "mcr"
 )
 
 func main() {
@@ -30,7 +36,7 @@ type ChequeRequest struct {
 
 func PostCheque(w http.ResponseWriter, r *http.Request) {
   multiReader, err := r.MultipartReader()
-  if err == nil {
+  if err != nil {
     // They didn't send multipart data, so we'll attempt to parse as JSON
     decoder := json.NewDecoder(r.Body)
     var chequeRequest ChequeRequest
@@ -41,17 +47,23 @@ func PostCheque(w http.ResponseWriter, r *http.Request) {
       return
     }
 
-    return processChequeFromRequest(chequeRequest)
+    processChequeFromRequest(chequeRequest)
   } else {
-    parts := make([]multipart.Part, 0)
+    parts := make([][]byte, 0)
     for {
       part, partErr := multiReader.NextPart()
-      parts = append(parts, part)
       if partErr == io.EOF {
-        return processMultiparts(parts)
+        processMultiparts(parts)
+      } else {
+        p, err := ioutil.ReadAll(part)
+        if err != nil {
+          http.Error(w, err.Error(), http.StatusBadRequest)
+          return
+        }
+        parts = append(parts, p)
       }
       if partErr != nil {
-        http.Error(w, partError.Error(), http.StatusBadRequest)
+        http.Error(w, partErr.Error(), http.StatusBadRequest)
         return
       }
     }
@@ -62,12 +74,23 @@ func processChequeFromRequest(request ChequeRequest) {
   // TODO: do something
 }
 
-func processMultiparts(parts []multipart.Part) {
-  // TODO: do sometihng
+func processMultiparts(parts [][]byte) (error, *ChequeResult) {
+  for _, p := range parts {
+    tmpFile, err := ioutil.TempFile(os.TempDir(), tmpPrefix)
+    if err != nil {
+      return err, nil
+    }
+    tmpFile.Close()
+
+    ioutil.WriteFile(tmpFile.Name(), p, 0644)
+
+    return ProcessCheque(tmpFile)
+  }
+  return nil, nil
 }
 
 func ProcessCheque(img *os.File) (error, *ChequeResult) {
-  outFile, err := ioutil.TempFile(os.TempDir(), prefix)
+  outFile, err := ioutil.TempFile(os.TempDir(), resultPrefix)
   if err != nil {
     return err, nil
   }
@@ -87,7 +110,12 @@ func ProcessCheque(img *os.File) (error, *ChequeResult) {
   cmd := exec.Command("tesseract", options...)
   output, err := cmd.CombinedOutput()
   if err != nil {
-    log.Printf("Error calling tesseract: %v\n%v", err, output)
+    log.Printf("Error calling tesseract: %v\n%s", err, output)
+    return err, nil
+  }
+
+  outFile, err = os.Open(outFile.Name() + ".txt")
+  if err != nil {
     return err, nil
   }
 
@@ -104,10 +132,12 @@ func ProcessTesseractOutput(outFile *os.File) (error, *ChequeResult) {
     }
   }
 
-  return *ChequeResult{
+  result := ChequeResult{
     Account: findAccountNumber(micrLine),
     Routing: findRoutingNumber(micrLine),
   }
+  log.Println(result)
+  return nil, &result
 }
 
 func findAccountNumber(micrLine string) (string) {
