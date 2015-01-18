@@ -11,6 +11,8 @@ import (
   "bufio"
   "strings"
   "io/ioutil"
+  "mime/multipart"
+  "fmt"
 
   "github.com/zenazn/goji"
 )
@@ -36,63 +38,80 @@ type ChequeRequest struct {
 
 func PostCheque(w http.ResponseWriter, r *http.Request) {
   multiReader, err := r.MultipartReader()
+  var chequeResult *ChequeResult
   if err != nil {
-    // They didn't send multipart data, so we'll attempt to parse as JSON
-    decoder := json.NewDecoder(r.Body)
-    var chequeRequest ChequeRequest
-    decodeErr := decoder.Decode(&chequeRequest)
-
-    if decodeErr != nil {
-      http.Error(w, decodeErr.Error(), http.StatusBadRequest)
-      return
-    }
-
-    processChequeFromRequest(chequeRequest)
+    chequeResult, err = processNonMultipartChequeRequest(r)
   } else {
-    parts := make([][]byte, 0)
-    for {
-      part, partErr := multiReader.NextPart()
-      if partErr == io.EOF {
-        processMultiparts(parts)
-      } else {
-        p, err := ioutil.ReadAll(part)
-        if err != nil {
-          http.Error(w, err.Error(), http.StatusBadRequest)
-          return
-        }
-        parts = append(parts, p)
-      }
-      if partErr != nil {
-        http.Error(w, partErr.Error(), http.StatusBadRequest)
-        return
-      }
-    }
+    chequeResult, err = processMultipartChequeRequest(multiReader)
   }
+
+  if err != nil {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+    return
+  }
+
+  w.Header().Set("Content-Type", "application/json")
+  responseData, err := json.Marshal(chequeResult)
+  if err != nil {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+    return
+  }
+
+  w.Write(responseData)
 }
 
-func processChequeFromRequest(request ChequeRequest) {
-  // TODO: do something
-}
+func processNonMultipartChequeRequest(r *http.Request) (*ChequeResult, error) {
+  decoder := json.NewDecoder(r.Body)
+  var chequeRequest ChequeRequest
+  decodeErr := decoder.Decode(&chequeRequest)
 
-func processMultiparts(parts [][]byte) (error, *ChequeResult) {
-  for _, p := range parts {
-    tmpFile, err := ioutil.TempFile(os.TempDir(), tmpPrefix)
-    if err != nil {
-      return err, nil
-    }
-    tmpFile.Close()
-
-    ioutil.WriteFile(tmpFile.Name(), p, 0644)
-
-    return ProcessCheque(tmpFile)
+  if decodeErr != nil {
+    return nil, decodeErr
   }
+
   return nil, nil
 }
 
-func ProcessCheque(img *os.File) (error, *ChequeResult) {
+func processMultipartChequeRequest(multiReader *multipart.Reader) (*ChequeResult, error) {
+  var chequeResult *ChequeResult
+  partCount := 0
+
+  for {
+    part, partErr := multiReader.NextPart()
+    partCount++
+
+    if partErr == io.EOF {
+      return chequeResult, nil
+    } else if partCount > 1 {
+      return chequeResult, fmt.Errorf("Multiple parts found. Currently we " +
+        "only support a single part.")
+    } else if partErr != nil {
+      return chequeResult, partErr
+    } else {
+      p, err := ioutil.ReadAll(part)
+      if err != nil {
+        return chequeResult, err
+      }
+
+      tmpFile, err := ioutil.TempFile(os.TempDir(), tmpPrefix)
+      if err != nil {
+        return nil, err
+      }
+      tmpFile.Close()
+
+      ioutil.WriteFile(tmpFile.Name(), p, 0644)
+      chequeResult, err = ProcessCheque(tmpFile)
+    }
+  }
+
+  // This should never be called
+  return nil, fmt.Errorf("Unable to find any multipart parts.")
+}
+
+func ProcessCheque(img *os.File) (*ChequeResult, error) {
   outFile, err := ioutil.TempFile(os.TempDir(), resultPrefix)
   if err != nil {
-    return err, nil
+    return nil, err
   }
 
   options := []string{
@@ -104,25 +123,25 @@ func ProcessCheque(img *os.File) (error, *ChequeResult) {
 
   err = outFile.Close()
   if err != nil {
-    return err, nil
+    return nil, err
   }
 
   cmd := exec.Command("tesseract", options...)
   output, err := cmd.CombinedOutput()
   if err != nil {
     log.Printf("Error calling tesseract: %v\n%s", err, output)
-    return err, nil
+    return nil, err
   }
 
   outFile, err = os.Open(outFile.Name() + ".txt")
   if err != nil {
-    return err, nil
+    return nil, err
   }
 
   return ProcessTesseractOutput(outFile)
 }
 
-func ProcessTesseractOutput(outFile *os.File) (error, *ChequeResult) {
+func ProcessTesseractOutput(outFile *os.File) (*ChequeResult, error) {
   scanner := bufio.NewScanner(outFile)
   var micrLine string
   for scanner.Scan() {
@@ -137,7 +156,7 @@ func ProcessTesseractOutput(outFile *os.File) (error, *ChequeResult) {
     Routing: findRoutingNumber(micrLine),
   }
   log.Println(result)
-  return nil, &result
+  return &result, nil
 }
 
 func findAccountNumber(micrLine string) (string) {
@@ -163,7 +182,6 @@ func findRoutingNumber(micrLine string) (string) {
 }
 
 type ChequeResult struct {
-  Account string
-  Routing string
+  Account string `json:"account"`
+  Routing string `json:"routing"`
 }
-
