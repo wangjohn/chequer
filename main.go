@@ -69,7 +69,20 @@ func processNonMultipartChequeRequest(r *http.Request) (*ChequeResult, error) {
     return nil, decodeErr
   }
 
-  return nil, nil
+  httpResponse, err := http.Get(chequeRequest.ImageURL)
+  if err != nil {
+    return nil, err
+  }
+  defer httpResponse.Body.Close()
+
+  tmpFile, err := ioutil.TempFile(os.TempDir(), tmpPrefix)
+  if err != nil {
+    return nil, err
+  }
+  defer tmpFile.Close()
+
+  _, err = io.Copy(tmpFile, httpResponse.Body)
+  return ProcessCheque(tmpFile)
 }
 
 func processMultipartChequeRequest(multiReader *multipart.Reader) (*ChequeResult, error) {
