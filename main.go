@@ -164,6 +164,7 @@ func ProcessTesseractOutput(outFile *os.File) (*ChequeResult, error) {
 		}
 	}
 
+	log.Println(micrLine)
 	result := ChequeResult{
 		Account: findAccountNumber(micrLine),
 		Routing: findRoutingNumber(micrLine),
@@ -173,22 +174,34 @@ func ProcessTesseractOutput(outFile *os.File) (*ChequeResult, error) {
 }
 
 func findAccountNumber(micrLine string) string {
-	re := regexp.MustCompile("@(\\d+)@")
-	match := re.FindStringSubmatch(micrLine)
+	regexes := []string{
+		"@(\\d+)@?",
+		"@?(\\d+)@",
+	}
+	for _, regexStr := range regexes {
+		re := regexp.MustCompile(regexStr)
+		match := re.FindStringSubmatch(micrLine)
 
-	if len(match) > 0 {
-		return match[1]
+		if len(match) > 0 {
+			return match[1]
+		}
 	}
 
 	return ""
 }
 
 func findRoutingNumber(micrLine string) string {
-	re := regexp.MustCompile("\\[([\\d-]+)\\[?")
-	match := re.FindStringSubmatch(micrLine)
+	regexes := []string{
+		"\\[([\\d-]+)\\[?",
+		"\\[?([\\d-]+)\\[",
+	}
+	for _, regexStr := range regexes {
+		re := regexp.MustCompile(regexStr)
+		match := re.FindStringSubmatch(micrLine)
 
-	if len(match) > 0 {
-		return match[1]
+		if len(match) > 0 {
+			return match[1]
+		}
 	}
 
 	return ""
