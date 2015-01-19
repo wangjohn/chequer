@@ -79,7 +79,7 @@ func processNonMultipartChequeRequest(r *http.Request) (*ChequeResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer tmpFile.Close()
+	defer removeTempFile(tmpFile)
 
 	_, err = io.Copy(tmpFile, httpResponse.Body)
 	return ProcessCheque(tmpFile)
@@ -110,7 +110,7 @@ func processMultipartChequeRequest(multiReader *multipart.Reader) (*ChequeResult
 			if err != nil {
 				return nil, err
 			}
-			tmpFile.Close()
+			defer removeTempFile(tmpFile)
 
 			ioutil.WriteFile(tmpFile.Name(), p, 0644)
 			chequeResult, err = ProcessCheque(tmpFile)
@@ -133,11 +133,7 @@ func ProcessCheque(img *os.File) (*ChequeResult, error) {
 		"-l",
 		tesseractLanguage,
 	}
-
-	err = outFile.Close()
-	if err != nil {
-		return nil, err
-	}
+	defer removeTempFile(outFile)
 
 	cmd := exec.Command("tesseract", options...)
 	output, err := cmd.CombinedOutput()
@@ -146,12 +142,13 @@ func ProcessCheque(img *os.File) (*ChequeResult, error) {
 		return nil, err
 	}
 
-	outFile, err = os.Open(outFile.Name() + ".txt")
+	tessFile, err := os.Open(outFile.Name() + ".txt")
 	if err != nil {
 		return nil, err
 	}
+	defer removeTempFile(tessFile)
 
-	return ProcessTesseractOutput(outFile)
+	return ProcessTesseractOutput(tessFile)
 }
 
 func ProcessTesseractOutput(outFile *os.File) (*ChequeResult, error) {
@@ -205,6 +202,11 @@ func findRoutingNumber(micrLine string) string {
 	}
 
 	return ""
+}
+
+func removeTempFile(tmpFile *os.File) {
+	tmpFile.Close()
+	os.Remove(tmpFile.Name())
 }
 
 type ChequeResult struct {
